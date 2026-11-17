@@ -85,6 +85,10 @@ p { margin: 0; }
 .empty .glyph { font-size: 36px; } .empty strong { display: block; color: var(--text); margin: var(--s2) 0 var(--s1); }
 .meter { height: 6px; border-radius: 999px; background: var(--raised); overflow: hidden; }
 .meter > i { display: block; height: 100%; width: calc(var(--f, 0) * 100%); min-width: 4px; border-radius: 999px; background: var(--c, var(--accent)); }
+.stepper { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); margin: var(--s3) 0; }
+.stepper strong { flex: 1; text-align: center; }
+.stepper button { width: 44px; height: 44px; border: 0; border-radius: 999px; background: var(--raised); color: var(--text); font: inherit; font-size: 22px; line-height: 1; cursor: pointer; }
+.stepper button:disabled { opacity: .35; cursor: default; }
 .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s2); }
 button.tile { border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .tile .k { font-size: 12px; font-weight: 500; color: var(--muted); }

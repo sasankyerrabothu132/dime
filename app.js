@@ -21,7 +21,7 @@ const ERROR_TEXT = {
 const state = {
   ledger: null, notice: null,
   tab: new URLSearchParams(location.search).get("tab") || "add",
-  historyRange: "month", insightsRange: "month", insightsBar: null,
+  historyRange: "month", insightsRange: "month", insightsBar: null, insightsBack: 0, historyBack: 0,
   entry: "", note: "", categoryID: localStorage.getItem("lastCategoryID"), addDate: null, lastSaved: null, addError: null,
 };
 
@@ -127,35 +127,73 @@ function expenseItem(e) {
 }
 
 function viewHistory() {
-  const days = core.byDay(core.expensesIn(state.ledger, interval(state.historyRange)));
+  const span = spanBack(state.historyRange, state.historyBack);
+  const days = core.byDay(core.expensesIn(state.ledger, span));
   const body = days.length ? days.map(day => `
       <div class="dayhead"><span>${esc(new Date(day.day).toLocaleDateString(LOCALE, { weekday: "long", day: "numeric", month: "short" }))}</span><span class="num">${esc(money(day.total))}</span></div>
       <div class="list">${day.expenses.map(expenseItem).join("")}</div>`).join("")
-    : `<div class="empty"><div class="glyph" aria-hidden="true">🗂️</div><strong>Nothing here yet</strong>${state.historyRange === "all" ? "Expenses you add will show up here." : "No expenses in this range. Try a longer one."}</div>`;
-  return `<h1>History</h1>${chips(["today", "week", "month", "all"], state.historyRange, "history-range")}<div>${body}</div>${budgetStrip()}`;
+    : `<div class="empty"><div class="glyph" aria-hidden="true">🗂️</div><strong>Nothing here yet</strong>${state.historyRange === "all" ? "Expenses you add will show up here." : "No expenses in this range. Try a longer one, or step back with the arrow."}</div>`;
+  return `<h1>History</h1>${chips(["today", "week", "month", "all"], state.historyRange, "history-range")}
+    ${span ? stepper("history-step", state.historyRange, span, state.historyBack) : ""}<div>${body}</div>${budgetStrip()}`;
+}
+
+/** A range's current period, or an earlier one after stepping back that many periods. null for all time. */
+function spanBack(range, back) {
+  let span = interval(range);
+  for (let i = 0; span && i < back; i++) {
+    span = core.intervalFor(range, new Date(span.start - 1), state.ledger.preferences.monthStartDay, WEEK_START);
+  }
+  return span;
+}
+const insightsSpan = () => spanBack(state.insightsRange, state.insightsBack);
+
+/** Earlier and later buttons around the name of the period on screen. */
+function stepper(action, range, span, back) {
+  const unit = range === "today" ? "day" : RANGE_LABEL[range].toLowerCase();
+  const hasEarlier = state.ledger.expenses.some(e => Date.parse(e.date) < span.start);
+  return `<div class="stepper">
+      <button data-action="${action}" data-dir="1" aria-label="Earlier ${unit}" ${hasEarlier ? "" : "disabled"}>‹</button>
+      <strong aria-live="polite">${esc(spanLabel(range, span))}</strong>
+      <button data-action="${action}" data-dir="-1" aria-label="Later ${unit}" ${back > 0 ? "" : "disabled"}>›</button></div>`;
+}
+
+/** "November 2026", "2026", or the first and last day when the period is not a calendar month. */
+function spanLabel(range, span) {
+  const first = new Date(span.start), last = new Date(span.end - 1);
+  if (range === "year") return String(first.getFullYear());
+  if (range === "today") return first.toLocaleDateString(LOCALE, { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+  if (range === "month" && first.getDate() === 1) return first.toLocaleDateString(LOCALE, { month: "long", year: "numeric" });
+  const short = d => d.toLocaleDateString(LOCALE, { day: "numeric", month: "short" });
+  return `${short(first)} to ${short(last)}${last.getFullYear() === new Date().getFullYear() ? "" : ` ${last.getFullYear()}`}`;
 }
 
 function viewInsights() {
-  const range = state.insightsRange, span = interval(range);
+  const range = state.insightsRange, span = insightsSpan();
+  const past = state.insightsBack > 0;
   const expenses = core.expensesIn(state.ledger, span);
   const sum = core.total(expenses);
-  const status = core.budgetStatus(state.ledger);
+  // the budget is monthly, so an earlier week or year has no budget figure of its own
+  const status = past ? (range === "month" ? core.budgetStatus(state.ledger, new Date(span.start)) : null) : core.budgetStatus(state.ledger);
   const daysSoFar = Math.max(1, Math.floor((Math.min(Date.now(), span.end - 1) - span.start) / 86400000) + 1);
   const now = Date.now();
   const unit = RANGE_LABEL[range].toLowerCase();
+  const label = spanLabel(range, span);
+  const here = past ? label : `this ${unit}`;
+  const head = `<h1>Insights</h1>${chips(["week", "month", "year"], range, "insights-range")}${stepper("insights-step", range, span, state.insightsBack)}`;
   const top = expenses.reduce((best, e) => (!best || core.toMinor(e.amount) > core.toMinor(best.amount) ? e : best), null);
   const biggest = top ? core.toMinor(top.amount) : 0;
   const nameOf = e => e.note || core.categoryById(state.ledger, e.categoryID)?.name || "Unknown";
   const tiles = `<div class="tiles">
-      <div class="card tile"><div class="k">Spent this ${RANGE_LABEL[range].toLowerCase()}</div><div class="v num">${esc(money(sum))}</div></div>
-      <button class="card tile" data-action="tab" data-tab="settings" aria-label="Budget. Opens Settings to change it."><div class="k">${status ? (status.isOver ? "Over budget by" : "Budget left") : "Budget"}</div>
+      <div class="card tile"><div class="k">${past ? "Spent" : `Spent this ${unit}`}</div><div class="v num">${esc(money(sum))}</div></div>
+      ${past && range !== "month" ? `<div class="card tile"><div class="k">Expenses</div><div class="v num">${expenses.length}</div></div>`
+      : `<button class="card tile" data-action="tab" data-tab="settings" aria-label="Budget. Opens Settings to change it."><div class="k">${status ? (status.isOver ? "Over budget by" : "Budget left") : "Budget"}</div>
         <div class="v num ${status?.isOver ? "danger" : status ? "" : "muted"}">${status ? esc(money(Math.abs(status.remaining))) : "Not set"}</div>
-        <div class="k">${status ? "Tap to change" : "Tap to set one"}</div></button>
+        <div class="k">${status ? "Tap to change" : "Tap to set one"}</div></button>`}
       <div class="card tile"><div class="k">Average per day</div><div class="v num">${esc(money(Math.round(sum / daysSoFar)))}</div></div>
       <div class="card tile"><div class="k">Biggest expense</div><div class="v num">${biggest ? esc(money(biggest)) : "None"}</div>${top ? `<div class="k clip">${esc(nameOf(top))}</div>` : ""}</div></div>`;
   if (!expenses.length) {
-    return `<h1>Insights</h1>${chips(["week", "month", "year"], range, "insights-range")}${tiles}
-      <div class="empty"><div class="glyph" aria-hidden="true">📊</div><strong>No spending to show</strong>Add an expense and this page fills in on its own.</div>`;
+    return `${head}${tiles}
+      <div class="empty"><div class="glyph" aria-hidden="true">📊</div><strong>No spending to show</strong>${past ? "Nothing was logged in this period." : "Add an expense and this page fills in on its own."}</div>`;
   }
   // one bar per day, or per month for the year view
   const buckets = [];
@@ -199,7 +237,7 @@ function viewInsights() {
   const pace = core.pace(expenses, span, now);
   const places = core.topPlaces(expenses, 50);
   const notes = [];
-  notes.push(`<strong>${esc(cats[0].category.name)}</strong> is your biggest category: ${esc(money(cats[0].total))}, ${Math.round(cats[0].share * 100)}% of this ${unit}.`);
+  notes.push(`<strong>${esc(cats[0].category.name)}</strong> is your biggest category: ${esc(money(cats[0].total))}, ${Math.round(cats[0].share * 100)}% of ${esc(here)}.`);
   if (pace.oneOff) {
     notes.push(`<strong>${esc(nameOf(pace.oneOff))}</strong> (${esc(money(core.toMinor(pace.oneOff.amount)))}) is one big payment. Everything else comes to ${esc(money(pace.everyday))}, about ${esc(money(pace.perDay))} a day.`);
   }
@@ -216,17 +254,18 @@ function viewInsights() {
   }
   const before = core.intervalFor(range, new Date(span.start - 1), state.ledger.preferences.monthStartDay, WEEK_START);
   const earlier = core.expensesIn(state.ledger, before);
-  if (earlier.length) {
-    const cutoff = before.start + (Math.min(now, span.end) - span.start);
-    const then = core.total(earlier.filter(e => Date.parse(e.date) < cutoff));
+  const cutoff = before.start + (Math.min(now, span.end) - span.start);
+  const then = core.total(earlier.filter(e => Date.parse(e.date) < cutoff));
+  if (then > 0) {
     const diff = sum - then;
-    notes.push(diff === 0 ? `Exactly the same as at this point last ${unit}.`
-      : `<strong>${esc(money(Math.abs(diff)))} ${diff > 0 ? "more" : "less"}</strong> than at this point last ${unit} (${esc(money(then))}).`);
+    const versus = past ? `the ${unit} before` : `at this point last ${unit}`;
+    notes.push(diff === 0 ? `Exactly the same as ${versus}.`
+      : `<strong>${esc(money(Math.abs(diff)))} ${diff > 0 ? "more" : "less"}</strong> than ${versus} (${esc(money(then))}).`);
   }
   const findings = `<div class="card"><div class="small muted">What stands out</div><ul class="notes">${notes.map(n => `<li>${n}</li>`).join("")}</ul></div>`;
   const placeRows = places.slice(0, 5).map(p => `<div class="place"><span class="clip">${esc(p.label)}</span>
       <span class="small muted">${p.count === 1 ? "once" : `${p.count} times`}</span><span class="num">${esc(money(p.total))}</span></div>`).join("");
-  return `<h1>Insights</h1>${chips(["week", "month", "year"], range, "insights-range")}${tiles}${findings}${chart}
+  return `${head}${tiles}${findings}${chart}
     <div class="card"><div class="small muted">By category. Tap one to see its expenses.</div><div class="stack">${rows}</div></div>
     ${placeRows ? `<div class="card"><div class="small muted">Where the money went</div>${placeRows}</div>` : ""}`;
 }
@@ -234,10 +273,11 @@ function viewInsights() {
 /** The expenses behind one category row on Insights, for the range being shown. */
 function sheetCategoryExpenses(id) {
   const c = core.categoryById(state.ledger, id);
-  const list = core.expensesIn(state.ledger, interval(state.insightsRange)).filter(e => e.categoryID === id)
+  const span = insightsSpan();
+  const list = core.expensesIn(state.ledger, span).filter(e => e.categoryID === id)
     .sort((a, b) => core.toMinor(b.amount) - core.toMinor(a.amount));
   openSheet(`${sheetHeader(`${c?.emoji ?? ""} ${c?.name ?? "Unknown"}`, "Close")}
-    <p class="small muted">${list.length} expense${list.length === 1 ? "" : "s"} this ${RANGE_LABEL[state.insightsRange].toLowerCase()}, ${esc(money(core.total(list)))} in total. Biggest first.</p>
+    <p class="small muted">${list.length} expense${list.length === 1 ? "" : "s"} in ${esc(spanLabel(state.insightsRange, span))}, ${esc(money(core.total(list)))} in total. Biggest first.</p>
     <div class="list">${list.map(e => {
       const day = new Date(e.date).toLocaleDateString(LOCALE, { day: "numeric", month: "short" });
       return `<button class="item" data-action="edit-expense" data-id="${esc(e.id)}">
@@ -402,8 +442,10 @@ function fail(form, error) {
 
 const ACTIONS = {
   tab: el => { state.tab = el.dataset.tab; render(); $("view").focus({ preventScroll: true }); scrollTo(0, 0); },
-  "history-range": el => { state.historyRange = el.dataset.range; render(); },
-  "insights-range": el => { state.insightsRange = el.dataset.range; state.insightsBar = null; render(); },
+  "history-range": el => { state.historyRange = el.dataset.range; state.historyBack = 0; render(); },
+  "history-step": el => { state.historyBack = Math.max(0, state.historyBack + Number(el.dataset.dir)); render(); scrollTo(0, 0); },
+  "insights-range": el => { state.insightsRange = el.dataset.range; state.insightsBar = null; state.insightsBack = 0; render(); },
+  "insights-step": el => { state.insightsBack = Math.max(0, state.insightsBack + Number(el.dataset.dir)); state.insightsBar = null; render(); },
   "show-category": el => sheetCategoryExpenses(el.dataset.id),
   "pick-bar": el => { state.insightsBar = Number(el.dataset.t); render(); },
   digit: el => { state.entry = core.entryAppend(state.entry, Number(el.dataset.digit), digits()); state.addError = null; render(); },
@@ -529,9 +571,35 @@ document.addEventListener("click", event => {
 });
 $("sheet").addEventListener("close", () => { pendingLedger = null; });
 
+/**
+ * Logging from outside the app: an iPhone shortcut opens Dime at ?add=12.50&cat=Food&note=Lunch and the expense is
+ * saved on arrival. A link can only ever add one expense, never change or remove any, and Undo is shown.
+ */
+function quickLog() {
+  const query = new URLSearchParams(location.search);
+  if (!query.has("add")) return;
+  history.replaceState(null, "", location.pathname);   // so reopening or refreshing does not add it twice
+  state.tab = "add";
+  const parsed = core.parseLooseAmount(query.get("add"));
+  const category = core.categoryByName(state.ledger, query.get("cat") || "");
+  const note = (query.get("note") || "").slice(0, 120);
+  if (!parsed || parsed.negative || !parsed.minor) { state.addError = "The shortcut did not send an amount, so nothing was saved."; return; }
+  if (!category) {                                      // keep what was typed; the person finishes it here
+    Object.assign(state, { entry: core.fromMinor(parsed.minor), note,
+      addError: `There is no category called "${query.get("cat") || ""}". Pick one and tap Save.` });
+    return;
+  }
+  try {
+    const { ledger, expense } = core.addExpense(state.ledger, { amount: core.fromMinor(parsed.minor), categoryID: category.id, note });
+    if (!commit(ledger)) { state.addError = "That did not save. Please try again."; return; }
+    Object.assign(state, { lastSaved: expense, categoryID: expense.categoryID });
+  } catch (error) { state.addError = ERROR_TEXT[error.code] || "That did not save. Please try again."; }
+}
+
 // ---------- start ----------
 
 state.ledger = load();
+quickLog();
 render();
 navigator.storage?.persist?.();                       // asks the browser not to clear the data on its own
 if ("serviceWorker" in navigator) {
