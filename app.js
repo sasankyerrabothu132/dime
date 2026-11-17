@@ -145,7 +145,15 @@ function spanBack(range, back) {
   }
   return span;
 }
-const insightsSpan = () => spanBack(state.insightsRange, state.insightsBack);
+/** All time on Insights: from the day of the first expense to the end of the latest month with anything in it. */
+function allSpan() {
+  const times = state.ledger.expenses.map(e => Date.parse(e.date));
+  const first = new Date(times.length ? Math.min(...times) : Date.now());
+  const last = new Date(Math.max(Date.now(), ...times));
+  return { start: new Date(first.getFullYear(), first.getMonth(), first.getDate()).getTime(),
+           end: new Date(last.getFullYear(), last.getMonth() + 1, 1).getTime() };
+}
+const insightsSpan = () => (state.insightsRange === "all" ? allSpan() : spanBack(state.insightsRange, state.insightsBack));
 
 /** Earlier and later buttons around the name of the period on screen. */
 function stepper(action, range, span, back) {
@@ -160,6 +168,7 @@ function stepper(action, range, span, back) {
 /** "November 2026", "2026", or the first and last day when the period is not a calendar month. */
 function spanLabel(range, span) {
   const first = new Date(span.start), last = new Date(span.end - 1);
+  if (range === "all") return "all time";
   if (range === "year") return String(first.getFullYear());
   if (range === "today") return first.toLocaleDateString(LOCALE, { weekday: "short", day: "numeric", month: "short", year: "numeric" });
   if (range === "month" && first.getDate() === 1) return first.toLocaleDateString(LOCALE, { month: "long", year: "numeric" });
@@ -169,23 +178,24 @@ function spanLabel(range, span) {
 
 function viewInsights() {
   const range = state.insightsRange, span = insightsSpan();
-  const past = state.insightsBack > 0;
+  const all = range === "all";
+  const past = !all && state.insightsBack > 0;
   const expenses = core.expensesIn(state.ledger, span);
   const sum = core.total(expenses);
   // the budget is monthly, so an earlier week or year has no budget figure of its own
-  const status = past ? (range === "month" ? core.budgetStatus(state.ledger, new Date(span.start)) : null) : core.budgetStatus(state.ledger);
+  const status = all ? null : past ? (range === "month" ? core.budgetStatus(state.ledger, new Date(span.start)) : null) : core.budgetStatus(state.ledger);
   const daysSoFar = Math.max(1, Math.floor((Math.min(Date.now(), span.end - 1) - span.start) / 86400000) + 1);
   const now = Date.now();
   const unit = RANGE_LABEL[range].toLowerCase();
   const label = spanLabel(range, span);
-  const here = past ? label : `this ${unit}`;
-  const head = `<h1>Insights</h1>${chips(["week", "month", "year"], range, "insights-range")}${stepper("insights-step", range, span, state.insightsBack)}`;
+  const here = all ? "everything you have logged" : past ? label : `this ${unit}`;
+  const head = `<h1>Insights</h1>${chips(["week", "month", "year", "all"], range, "insights-range")}${all ? "" : stepper("insights-step", range, span, state.insightsBack)}`;
   const top = expenses.reduce((best, e) => (!best || core.toMinor(e.amount) > core.toMinor(best.amount) ? e : best), null);
   const biggest = top ? core.toMinor(top.amount) : 0;
   const nameOf = e => e.note || core.categoryById(state.ledger, e.categoryID)?.name || "Unknown";
   const tiles = `<div class="tiles">
-      <div class="card tile"><div class="k">${past ? "Spent" : `Spent this ${unit}`}</div><div class="v num">${esc(money(sum))}</div></div>
-      ${past && range !== "month" ? `<div class="card tile"><div class="k">Expenses</div><div class="v num">${expenses.length}</div></div>`
+      <div class="card tile"><div class="k">${all ? "Spent in total" : past ? "Spent" : `Spent this ${unit}`}</div><div class="v num">${esc(money(sum))}</div></div>
+      ${all || (past && range !== "month") ? `<div class="card tile"><div class="k">Expenses</div><div class="v num">${expenses.length}</div></div>`
       : `<button class="card tile" data-action="tab" data-tab="settings" aria-label="Budget. Opens Settings to change it."><div class="k">${status ? (status.isOver ? "Over budget by" : "Budget left") : "Budget"}</div>
         <div class="v num ${status?.isOver ? "danger" : status ? "" : "muted"}">${status ? esc(money(Math.abs(status.remaining))) : "Not set"}</div>
         <div class="k">${status ? "Tap to change" : "Tap to set one"}</div></button>`}
@@ -197,7 +207,12 @@ function viewInsights() {
   }
   // one bar per day, or per month for the year view
   const buckets = [];
-  if (range === "year") {
+  if (all) {                                             // one bar per month, from the first month with an expense
+    const first = new Date(span.start);
+    for (let t = new Date(first.getFullYear(), first.getMonth(), 1); t.getTime() < span.end; t.setMonth(t.getMonth() + 1)) {
+      buckets.push({ start: t.getTime(), end: new Date(t.getFullYear(), t.getMonth() + 1, 1).getTime(), total: 0 });
+    }
+  } else if (range === "year") {
     const y = new Date(span.start).getFullYear();
     for (let m = 0; m < 12; m++) buckets.push({ start: new Date(y, m, 1).getTime(), end: new Date(y, m + 1, 1).getTime(), total: 0 });
   } else {
@@ -208,7 +223,7 @@ function viewInsights() {
   for (const b of buckets) b.count = 0;
   for (const e of expenses) { const t = Date.parse(e.date); const b = buckets.find(b => t >= b.start && t < b.end); if (b) { b.total += core.toMinor(e.amount); b.count++; } }
   const peak = Math.max(...buckets.map(b => b.total), 1);
-  const yearly = range === "year";
+  const yearly = range === "year" || all;
   // the bar being read out: the one tapped, else today (this month for the year view), else the highest
   const picked = buckets.find(b => b.start === state.insightsBar)
     || buckets.find(b => now >= b.start && now < b.end && b.total)
@@ -216,6 +231,7 @@ function viewInsights() {
   const full = t => new Date(t).toLocaleDateString(LOCALE, yearly ? { month: "long", year: "numeric" } : { weekday: "short", day: "numeric", month: "short" });
   const tick = (b, i) => {
     const d = new Date(b.start);
+    if (yearly && buckets.length > 12) return d.getMonth() === 0 || i === 0 ? String(d.getFullYear()).slice(2) : "";   // too many to letter: mark the years
     if (yearly) return d.toLocaleDateString(LOCALE, { month: "narrow" });
     if (range === "week") return d.toLocaleDateString(LOCALE, { weekday: "narrow" });
     const n = d.getDate();
@@ -252,10 +268,9 @@ function viewInsights() {
     }
     notes.push(line);
   }
-  const before = core.intervalFor(range, new Date(span.start - 1), state.ledger.preferences.monthStartDay, WEEK_START);
-  const earlier = core.expensesIn(state.ledger, before);
-  const cutoff = before.start + (Math.min(now, span.end) - span.start);
-  const then = core.total(earlier.filter(e => Date.parse(e.date) < cutoff));
+  const before = all ? null : core.intervalFor(range, new Date(span.start - 1), state.ledger.preferences.monthStartDay, WEEK_START);
+  const cutoff = before ? before.start + (Math.min(now, span.end) - span.start) : 0;
+  const then = before ? core.total(core.expensesIn(state.ledger, before).filter(e => Date.parse(e.date) < cutoff)) : 0;
   if (then > 0) {
     const diff = sum - then;
     const versus = past ? `the ${unit} before` : `at this point last ${unit}`;
@@ -277,7 +292,7 @@ function sheetCategoryExpenses(id) {
   const list = core.expensesIn(state.ledger, span).filter(e => e.categoryID === id)
     .sort((a, b) => core.toMinor(b.amount) - core.toMinor(a.amount));
   openSheet(`${sheetHeader(`${c?.emoji ?? ""} ${c?.name ?? "Unknown"}`, "Close")}
-    <p class="small muted">${list.length} expense${list.length === 1 ? "" : "s"} in ${esc(spanLabel(state.insightsRange, span))}, ${esc(money(core.total(list)))} in total. Biggest first.</p>
+    <p class="small muted">${list.length} expense${list.length === 1 ? "" : "s"} ${state.insightsRange === "all" ? "in total" : `in ${esc(spanLabel(state.insightsRange, span))}`}, ${esc(money(core.total(list)))} in total. Biggest first.</p>
     <div class="list">${list.map(e => {
       const day = new Date(e.date).toLocaleDateString(LOCALE, { day: "numeric", month: "short" });
       return `<button class="item" data-action="edit-expense" data-id="${esc(e.id)}">
