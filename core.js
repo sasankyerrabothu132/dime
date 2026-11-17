@@ -274,6 +274,40 @@ export function byDay(expenses) {
     .sort((a, b) => b.day - a.day);
 }
 
+/** Expenses grouped by their note, ignoring case: [{label, count, total}], biggest total first. Notes left empty are skipped. */
+export function topPlaces(expenses, limit = 5) {
+  const groups = new Map();
+  for (const e of expenses) {
+    const label = (e.note || "").trim().replace(/\s+/g, " ");
+    if (!label) continue;
+    const key = label.toLowerCase();
+    const g = groups.get(key) || { label, count: 0, total: 0 };
+    g.count++; g.total += toMinor(e.amount);
+    groups.set(key, g);
+  }
+  return [...groups.values()].sort((a, b) => b.total - a.total || b.count - a.count).slice(0, limit);
+}
+
+/**
+ * Where a period is heading. A single expense that is at least 30% of the total and three times the next biggest (rent, a flight) is treated as a
+ * one-off: it is counted once, and only the rest is assumed to continue at the same daily rate.
+ * Returns {oneOff (expense or null), everyday, perDay, daysSoFar, daysTotal, daysLeft, projected (null once the period is over)}.
+ */
+export function pace(expenses, span, now = Date.now()) {
+  const DAY = 86400000;
+  const sum = total(expenses);
+  const daysTotal = Math.round((span.end - span.start) / DAY);
+  const daysSoFar = Math.min(daysTotal, Math.max(1, Math.floor((now - span.start) / DAY) + 1));
+  const biggest = expenses.reduce((top, e) => (!top || toMinor(e.amount) > toMinor(top.amount) ? e : top), null);
+  const second = expenses.reduce((top, e) => (e !== biggest ? Math.max(top, toMinor(e.amount)) : top), 0);
+  const oneOff = biggest && second > 0 && toMinor(biggest.amount) * 10 >= sum * 3 && toMinor(biggest.amount) >= second * 3 ? biggest : null;
+  const everyday = sum - (oneOff ? toMinor(oneOff.amount) : 0);
+  const perDay = Math.round(everyday / daysSoFar);
+  const over = now >= span.end;
+  return { oneOff, everyday, perDay, daysSoFar, daysTotal, daysLeft: daysTotal - daysSoFar,
+           projected: over ? null : sum + perDay * (daysTotal - daysSoFar) };
+}
+
 /** null when no budget is set. */
 export function budgetStatus(ledger, date = new Date()) {
   const budget = ledger.preferences.monthlyBudget === null ? null : toMinor(ledger.preferences.monthlyBudget);

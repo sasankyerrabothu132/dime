@@ -21,7 +21,7 @@ const ERROR_TEXT = {
 const state = {
   ledger: null, notice: null,
   tab: new URLSearchParams(location.search).get("tab") || "add",
-  historyRange: "month", insightsRange: "month",
+  historyRange: "month", insightsRange: "month", insightsBar: null,
   entry: "", note: "", categoryID: localStorage.getItem("lastCategoryID"), addDate: null, lastSaved: null, addError: null,
 };
 
@@ -141,13 +141,18 @@ function viewInsights() {
   const sum = core.total(expenses);
   const status = core.budgetStatus(state.ledger);
   const daysSoFar = Math.max(1, Math.floor((Math.min(Date.now(), span.end - 1) - span.start) / 86400000) + 1);
-  const biggest = expenses.reduce((max, e) => Math.max(max, core.toMinor(e.amount)), 0);
+  const now = Date.now();
+  const unit = RANGE_LABEL[range].toLowerCase();
+  const top = expenses.reduce((best, e) => (!best || core.toMinor(e.amount) > core.toMinor(best.amount) ? e : best), null);
+  const biggest = top ? core.toMinor(top.amount) : 0;
+  const nameOf = e => e.note || core.categoryById(state.ledger, e.categoryID)?.name || "Unknown";
   const tiles = `<div class="tiles">
       <div class="card tile"><div class="k">Spent this ${RANGE_LABEL[range].toLowerCase()}</div><div class="v num">${esc(money(sum))}</div></div>
-      <div class="card tile"><div class="k">${status ? (status.isOver ? "Over budget by" : "Budget left") : "Budget"}</div>
-        <div class="v num ${status?.isOver ? "danger" : status ? "" : "muted"}">${status ? esc(money(Math.abs(status.remaining))) : "Not set"}</div></div>
+      <button class="card tile" data-action="tab" data-tab="settings" aria-label="Budget. Opens Settings to change it."><div class="k">${status ? (status.isOver ? "Over budget by" : "Budget left") : "Budget"}</div>
+        <div class="v num ${status?.isOver ? "danger" : status ? "" : "muted"}">${status ? esc(money(Math.abs(status.remaining))) : "Not set"}</div>
+        <div class="k">${status ? "Tap to change" : "Tap to set one"}</div></button>
       <div class="card tile"><div class="k">Average per day</div><div class="v num">${esc(money(Math.round(sum / daysSoFar)))}</div></div>
-      <div class="card tile"><div class="k">Biggest expense</div><div class="v num">${biggest ? esc(money(biggest)) : "None"}</div></div></div>`;
+      <div class="card tile"><div class="k">Biggest expense</div><div class="v num">${biggest ? esc(money(biggest)) : "None"}</div>${top ? `<div class="k clip">${esc(nameOf(top))}</div>` : ""}</div></div>`;
   if (!expenses.length) {
     return `<h1>Insights</h1>${chips(["week", "month", "year"], range, "insights-range")}${tiles}
       <div class="empty"><div class="glyph" aria-hidden="true">📊</div><strong>No spending to show</strong>Add an expense and this page fills in on its own.</div>`;
@@ -162,19 +167,82 @@ function viewInsights() {
       buckets.push({ start: t.getTime(), end: new Date(t.getFullYear(), t.getMonth(), t.getDate() + 1).getTime(), total: 0 });
     }
   }
-  for (const e of expenses) { const t = Date.parse(e.date); const b = buckets.find(b => t >= b.start && t < b.end); if (b) b.total += core.toMinor(e.amount); }
+  for (const b of buckets) b.count = 0;
+  for (const e of expenses) { const t = Date.parse(e.date); const b = buckets.find(b => t >= b.start && t < b.end); if (b) { b.total += core.toMinor(e.amount); b.count++; } }
   const peak = Math.max(...buckets.map(b => b.total), 1);
-  const fmt = range === "year" ? { month: "short" } : { day: "numeric", month: "short" };
-  const label = t => new Date(t).toLocaleDateString(LOCALE, fmt);
-  const chart = `<div class="card"><div class="small muted">${range === "year" ? "By month" : "By day"}, highest ${esc(money(peak))}</div>
-      <div class="bars" role="img" aria-label="Spending ${range === "year" ? "by month" : "by day"}. Highest ${esc(money(peak))}.">${buckets.map(b =>
-        `<i data-f="${(b.total / peak).toFixed(4)}" title="${esc(label(b.start))}: ${esc(money(b.total))}"></i>`).join("")}</div>
-      <div class="axis"><span>${esc(label(buckets[0].start))}</span><span>${esc(label(buckets[buckets.length - 1].start))}</span></div></div>`;
-  const rows = core.byCategory(state.ledger, expenses).map(r => `<div class="catrow">
-      <div class="top"><span><span aria-hidden="true">${esc(r.category.emoji)}</span> ${esc(r.category.name)}</span><span class="num">${esc(money(r.total))}</span></div>
-      <div class="bot"><div class="meter" data-f="${r.share.toFixed(4)}" data-c="${esc(r.category.colorHex)}"><i></i></div><span class="pct num">${Math.round(r.share * 100)}%</span></div></div>`).join("");
-  return `<h1>Insights</h1>${chips(["week", "month", "year"], range, "insights-range")}${tiles}${chart}
-    <div class="card"><div class="small muted">By category</div><div class="stack">${rows}</div></div>`;
+  const yearly = range === "year";
+  // the bar being read out: the one tapped, else today (this month for the year view), else the highest
+  const picked = buckets.find(b => b.start === state.insightsBar)
+    || buckets.find(b => now >= b.start && now < b.end && b.total)
+    || buckets.find(b => b.total === peak);
+  const full = t => new Date(t).toLocaleDateString(LOCALE, yearly ? { month: "long", year: "numeric" } : { weekday: "short", day: "numeric", month: "short" });
+  const tick = (b, i) => {
+    const d = new Date(b.start);
+    if (yearly) return d.toLocaleDateString(LOCALE, { month: "narrow" });
+    if (range === "week") return d.toLocaleDateString(LOCALE, { weekday: "narrow" });
+    const n = d.getDate();
+    return (i === 0 || n % 5 === 0) && !(i === 1 && n % 5 === 0) ? String(n) : "";
+  };
+  const chart = `<div class="card"><div class="small muted">${yearly ? "By month" : "By day"}. Tap a bar to see the amount.</div>
+      <div class="readout" aria-live="polite"><span>${esc(full(picked.start))}</span><strong class="num">${esc(money(picked.total))}</strong>
+        <span class="small muted">${picked.count ? `${picked.count} expense${picked.count === 1 ? "" : "s"}` : "nothing spent"}</span></div>
+      <div class="bars" role="group" aria-label="Spending ${yearly ? "by month" : "by day"}">${buckets.map((b, i) =>
+        `<button type="button" class="col${b === picked ? " on" : ""}${b.total ? "" : " zero"}${b.start > now ? " later" : ""}" data-action="pick-bar" data-t="${b.start}"
+          aria-pressed="${b === picked}" aria-label="${esc(full(b.start))}: ${esc(money(b.total))}">
+          <span class="track"><i data-f="${b.total ? Math.max(b.total / peak, 0.05).toFixed(4) : 0}"></i></span><span class="tick" aria-hidden="true">${esc(tick(b, i))}</span></button>`).join("")}</div></div>`;
+  const cats = core.byCategory(state.ledger, expenses);
+  const rows = cats.map(r => `<button class="catrow" data-action="show-category" data-id="${esc(r.category.id)}">
+      <div class="top"><span><span aria-hidden="true">${esc(r.category.emoji)}</span> ${esc(r.category.name)}</span><span class="num">${esc(money(r.total))} <span class="chev" aria-hidden="true">›</span></span></div>
+      <div class="bot"><div class="meter" data-f="${r.share.toFixed(4)}" data-c="${esc(r.category.colorHex)}"><i></i></div><span class="pct num">${Math.round(r.share * 100)}%</span></div></button>`).join("");
+
+  // plain-language findings, most useful first
+  const pace = core.pace(expenses, span, now);
+  const places = core.topPlaces(expenses, 50);
+  const notes = [];
+  notes.push(`<strong>${esc(cats[0].category.name)}</strong> is your biggest category: ${esc(money(cats[0].total))}, ${Math.round(cats[0].share * 100)}% of this ${unit}.`);
+  if (pace.oneOff) {
+    notes.push(`<strong>${esc(nameOf(pace.oneOff))}</strong> (${esc(money(core.toMinor(pace.oneOff.amount)))}) is one big payment. Everything else comes to ${esc(money(pace.everyday))}, about ${esc(money(pace.perDay))} a day.`);
+  }
+  const repeat = places.filter(p => p.count > 1).sort((a, b) => b.count - a.count || b.total - a.total)[0];
+  if (repeat) notes.push(`You paid <strong>${esc(repeat.label)}</strong> ${repeat.count} times, ${esc(money(repeat.total))} in total.`);
+  if (!yearly && pace.projected !== null && pace.daysLeft > 0) {
+    let line = `At this pace you will end the ${unit} at about <strong>${esc(money(pace.projected))}</strong>.`;
+    if (range === "month" && status) {
+      const gap = pace.perDay * pace.daysLeft - status.remaining;
+      line += gap > 0 ? ` That is ${esc(money(gap))} over your budget.` : ` That is ${esc(money(-gap))} under your budget.`;
+      if (status.remaining > 0 && gap > 0) line += ` To stay inside it, keep to ${esc(money(Math.floor(status.remaining / pace.daysLeft)))} a day for the next ${pace.daysLeft} days.`;
+    }
+    notes.push(line);
+  }
+  const before = core.intervalFor(range, new Date(span.start - 1), state.ledger.preferences.monthStartDay, WEEK_START);
+  const earlier = core.expensesIn(state.ledger, before);
+  if (earlier.length) {
+    const cutoff = before.start + (Math.min(now, span.end) - span.start);
+    const then = core.total(earlier.filter(e => Date.parse(e.date) < cutoff));
+    const diff = sum - then;
+    notes.push(diff === 0 ? `Exactly the same as at this point last ${unit}.`
+      : `<strong>${esc(money(Math.abs(diff)))} ${diff > 0 ? "more" : "less"}</strong> than at this point last ${unit} (${esc(money(then))}).`);
+  }
+  const findings = `<div class="card"><div class="small muted">What stands out</div><ul class="notes">${notes.map(n => `<li>${n}</li>`).join("")}</ul></div>`;
+  const placeRows = places.slice(0, 5).map(p => `<div class="place"><span class="clip">${esc(p.label)}</span>
+      <span class="small muted">${p.count === 1 ? "once" : `${p.count} times`}</span><span class="num">${esc(money(p.total))}</span></div>`).join("");
+  return `<h1>Insights</h1>${chips(["week", "month", "year"], range, "insights-range")}${tiles}${findings}${chart}
+    <div class="card"><div class="small muted">By category. Tap one to see its expenses.</div><div class="stack">${rows}</div></div>
+    ${placeRows ? `<div class="card"><div class="small muted">Where the money went</div>${placeRows}</div>` : ""}`;
+}
+
+/** The expenses behind one category row on Insights, for the range being shown. */
+function sheetCategoryExpenses(id) {
+  const c = core.categoryById(state.ledger, id);
+  const list = core.expensesIn(state.ledger, interval(state.insightsRange)).filter(e => e.categoryID === id)
+    .sort((a, b) => core.toMinor(b.amount) - core.toMinor(a.amount));
+  openSheet(`${sheetHeader(`${c?.emoji ?? ""} ${c?.name ?? "Unknown"}`, "Close")}
+    <p class="small muted">${list.length} expense${list.length === 1 ? "" : "s"} this ${RANGE_LABEL[state.insightsRange].toLowerCase()}, ${esc(money(core.total(list)))} in total. Biggest first.</p>
+    <div class="list">${list.map(e => {
+      const day = new Date(e.date).toLocaleDateString(LOCALE, { day: "numeric", month: "short" });
+      return `<button class="item" data-action="edit-expense" data-id="${esc(e.id)}">
+        <span class="main"><span class="title">${esc(e.note || c?.name || "Unknown")}</span><div class="sub">${esc(day)}</div></span>
+        <span class="end"><span class="title num">${esc(money(core.toMinor(e.amount)))}</span></span></button>`; }).join("")}</div>`);
 }
 
 function viewSettings() {
@@ -248,7 +316,7 @@ function openSheet(html) {
   if (!sheet.open) sheet.showModal();
 }
 function closeSheet() { $("sheet").close(); $("sheet").innerHTML = ""; }
-const sheetHeader = title => `<header><h1 id="sheet-title">${esc(title)}</h1><button class="link" data-action="close-sheet">Cancel</button></header>`;
+const sheetHeader = (title, close = "Cancel") => `<header><h1 id="sheet-title">${esc(title)}</h1><button class="link" data-action="close-sheet">${close}</button></header>`;
 const localDate = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const localDateTime = d => `${localDate(d)}T${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 
@@ -335,7 +403,9 @@ function fail(form, error) {
 const ACTIONS = {
   tab: el => { state.tab = el.dataset.tab; render(); $("view").focus({ preventScroll: true }); scrollTo(0, 0); },
   "history-range": el => { state.historyRange = el.dataset.range; render(); },
-  "insights-range": el => { state.insightsRange = el.dataset.range; render(); },
+  "insights-range": el => { state.insightsRange = el.dataset.range; state.insightsBar = null; render(); },
+  "show-category": el => sheetCategoryExpenses(el.dataset.id),
+  "pick-bar": el => { state.insightsBar = Number(el.dataset.t); render(); },
   digit: el => { state.entry = core.entryAppend(state.entry, Number(el.dataset.digit), digits()); state.addError = null; render(); },
   separator: () => { state.entry = core.entrySeparator(state.entry, digits()); render(); },
   backspace: () => { state.entry = core.entryBackspace(state.entry); render(); },
@@ -464,4 +534,10 @@ $("sheet").addEventListener("close", () => { pendingLedger = null; });
 state.ledger = load();
 render();
 navigator.storage?.persist?.();                       // asks the browser not to clear the data on its own
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+if ("serviceWorker" in navigator) {
+  if (["localhost", "127.0.0.1"].includes(location.hostname)) {
+    // On the development machine the offline copy only gets in the way: always load the files as they are now.
+    navigator.serviceWorker.getRegistrations().then(list => list.forEach(r => r.unregister())).catch(() => {});
+    if (window.caches) caches.keys().then(keys => keys.forEach(k => caches.delete(k))).catch(() => {});
+  } else navigator.serviceWorker.register("sw.js").catch(() => {});
+}

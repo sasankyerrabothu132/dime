@@ -213,3 +213,24 @@ test("backup round-trips and rejects junk", () => {
   const native = '{"categories":[{"colorHex":"#F2994A","emoji":"🍜","id":"A","isArchived":false,"name":"Food","sortOrder":0}],"expenses":[{"amount":"4.5","categoryID":"A","date":"2026-11-16T18:00:00Z","id":"E","note":"x"}],"preferences":{"currencyCode":"USD","monthlyBudget":null,"monthStartDay":1},"schemaVersion":1}';
   assert.equal(core.decodeBackup(native).expenses[0].amount, "4.5");
 });
+
+test("top places group notes without caring about case and skip empty notes", () => {
+  const e = (note, amount) => ({ id: note + amount, amount, categoryID: "c", note, date: "2026-11-12T10:00:00Z" });
+  const places = core.topPlaces([e("Uber", "17"), e("uber ", "65"), e("Rent", "823.23"), e("", "5"), e("Lyft", "14.95")]);
+  assert.deepEqual(places.map(p => [p.label, p.count, p.total]), [["Rent", 1, 823230], ["Uber", 2, 82000], ["Lyft", 1, 14950]]);
+});
+
+test("pace counts a dominant expense once and projects the rest at the daily rate", () => {
+  const e = (amount, day) => ({ id: amount, amount, categoryID: "c", note: "", date: new Date(2026, 10, day, 12).toISOString() });
+  const span = { start: new Date(2026, 10, 1).getTime(), end: new Date(2026, 11, 1).getTime() };
+  const now = new Date(2026, 10, 10, 9).getTime();
+  const p = core.pace([e("800", 2), e("60", 3), e("40", 9)], span, now);
+  assert.equal(p.oneOff.amount, "800");
+  assert.equal(p.everyday, 100000);
+  assert.equal(p.daysSoFar, 10); assert.equal(p.daysTotal, 30); assert.equal(p.daysLeft, 20);
+  assert.equal(p.perDay, 10000);
+  assert.equal(p.projected, 900000 + 200000);
+  // nothing dominant: no one-off, and a finished period has no projection
+  const flat = core.pace([e("50", 2), e("60", 3), e("40", 9)], span, new Date(2026, 11, 5).getTime());
+  assert.equal(flat.oneOff, null); assert.equal(flat.projected, null); assert.equal(flat.daysSoFar, 30);
+});
