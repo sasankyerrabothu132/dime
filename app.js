@@ -571,36 +571,21 @@ document.addEventListener("click", event => {
 });
 $("sheet").addEventListener("close", () => { pendingLedger = null; });
 
-/**
- * Logging from outside the app: an iPhone shortcut opens Dime at ?add=12.50&cat=Food&note=Lunch and the expense is
- * saved on arrival. A link can only ever add one expense, never change or remove any, and Undo is shown.
- */
-function quickLog() {
-  const query = new URLSearchParams(location.search);
-  if (!query.has("add")) return;
-  history.replaceState(null, "", location.pathname);   // so reopening or refreshing does not add it twice
-  state.tab = "add";
-  const parsed = core.parseLooseAmount(query.get("add"));
-  const category = core.categoryByName(state.ledger, query.get("cat") || "");
-  const note = (query.get("note") || "").slice(0, 120);
-  if (!parsed || parsed.negative || !parsed.minor) { state.addError = "The shortcut did not send an amount, so nothing was saved."; return; }
-  if (!category) {                                      // keep what was typed; the person finishes it here
-    Object.assign(state, { entry: core.fromMinor(parsed.minor), note,
-      addError: `There is no category called "${query.get("cat") || ""}". Pick one and tap Save.` });
-    return;
-  }
-  try {
-    const { ledger, expense } = core.addExpense(state.ledger, { amount: core.fromMinor(parsed.minor), categoryID: category.id, note });
-    if (!commit(ledger)) { state.addError = "That did not save. Please try again."; return; }
-    Object.assign(state, { lastSaved: expense, categoryID: expense.categoryID });
-  } catch (error) { state.addError = ERROR_TEXT[error.code] || "That did not save. Please try again."; }
-}
-
 // ---------- start ----------
 
 state.ledger = load();
-quickLog();
 render();
+
+// iOS keeps the app as it was left. Coming back after a while (Back Tap, the Home Screen) is nearly always to log
+// something, so return to the number pad, unless an expense or category is open for editing.
+let hiddenAt = 0;
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) { hiddenAt = Date.now(); return; }
+  if (hiddenAt && Date.now() - hiddenAt > 10000 && state.tab !== "add" && !$("sheet").open) {
+    Object.assign(state, { tab: "add", historyBack: 0, insightsBack: 0 });
+    render(); scrollTo(0, 0);
+  }
+});
 navigator.storage?.persist?.();                       // asks the browser not to clear the data on its own
 if ("serviceWorker" in navigator) {
   if (["localhost", "127.0.0.1"].includes(location.hostname)) {
