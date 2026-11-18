@@ -289,6 +289,38 @@ export function topPlaces(expenses, limit = 5) {
 }
 
 /**
+ * What an expense was really for. A few kinds of spending are recognised by words in the note, so that every cab
+ * ride or every flight is counted together whatever category it was filed under; anything else is grouped by its
+ * category. Order matters: "Uber Eats" is food, not a cab.
+ */
+const KINDS = [
+  [null, /\b(uber\s*eats|ubereats|door\s*dash|grubhub|instacart|swiggy|zomato)\b/i],          // falls through to the category
+  ["Cabs", /\b(uber|lyft|taxi|cab|cabs|ola|rapido|waymo)\b/i],
+  ["Flights", /\b(flight|flights|airline|airlines|airways|airfare|air india|indigo|delta|southwest|spirit|frontier|emirates|jetblue)\b/i],
+  ["Fuel", /\b(fuel|gas|gasoline|petrol|diesel)\b/i],
+  ["Rent", /\brent\b/i],
+];
+export function kindOf(ledger, expense) {
+  const note = expense.note || "";
+  for (const [label, pattern] of KINDS) if (pattern.test(note)) { if (label) return label; break; }
+  return categoryById(ledger, expense.categoryID)?.name || "Other";
+}
+
+/** Spending by kind, biggest first: [{label, count, total, share, places: topPlaces of that kind}]. */
+export function byKind(ledger, expenses) {
+  const groups = new Map();
+  for (const e of expenses) {
+    const label = kindOf(ledger, e);
+    if (!groups.has(label)) groups.set(label, []);
+    groups.get(label).push(e);
+  }
+  const grand = total(expenses);
+  return [...groups].map(([label, list]) => (
+    { label, count: list.length, total: total(list), share: grand ? total(list) / grand : 0, places: topPlaces(list, 50) }))
+    .sort((a, b) => b.total - a.total || a.label.localeCompare(b.label));
+}
+
+/**
  * Where a period is heading. A single expense that is at least 30% of the total and three times the next biggest (rent, a flight) is treated as a
  * one-off: it is counted once, and only the rest is assumed to continue at the same daily rate.
  * Returns {oneOff (expense or null), everyday, perDay, daysSoFar, daysTotal, daysLeft, projected (null once the period is over)}.

@@ -113,9 +113,13 @@ button.tile { border: 0; color: inherit; font: inherit; text-align: left; cursor
 .notes { margin: var(--s2) 0 0; padding-left: 18px; }
 .notes li { line-height: 1.45; } .notes li + li { margin-top: var(--s2); }
 .notes li::marker { color: var(--accent); }
-.place { display: flex; align-items: baseline; gap: var(--s3); padding: var(--s2) 0; }
+.place { display: flex; align-items: center; gap: var(--s3); width: 100%; padding: var(--s3) 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .place + .place { border-top: 1px solid var(--border); }
-.place .clip { flex: 1; min-width: 0; font-weight: 600; }
+.place .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.place .name { font-weight: 600; }
+.place .end { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-weight: 600; }
+.place .chev { color: var(--muted); }
+.clip { flex: 1; min-width: 0; font-weight: 600; }
 .clip { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .catrow .top { display: flex; justify-content: space-between; gap: var(--s2); font-weight: 600; margin-bottom: var(--s2); }
 .catrow .bot { display: flex; align-items: center; gap: var(--s3); }

@@ -1,6 +1,6 @@
 // Keeps a full copy of the app on the device so it opens with no connection.
 // Bump VERSION whenever any file below changes; the phone then picks up the new copy on its next open.
-const VERSION = "dime-v5";
+const VERSION = "dime-v6";
 const FILES = ["./", "index.html", "app.css", "app.js", "core.js", "manifest.webmanifest",
   "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png"];
 

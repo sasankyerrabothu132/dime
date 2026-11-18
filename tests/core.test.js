@@ -234,3 +234,17 @@ test("pace counts a dominant expense once and projects the rest at the daily rat
   const flat = core.pace([e("50", 2), e("60", 3), e("40", 9)], span, new Date(2026, 11, 5).getTime());
   assert.equal(flat.oneOff, null); assert.equal(flat.projected, null); assert.equal(flat.daysSoFar, 30);
 });
+
+test("kinds pull cabs, flights, fuel and rent together and leave the rest under their category", () => {
+  let ledger = core.newLedger();
+  const id = name => core.categoryByName(ledger, name).id;
+  const rows = [["17", "Transport", "Uber"], ["23", "Transport", "Uber haircut"], ["14.95", "Transport", "Lyft"], ["95", "Transport", "Dallas flight"],
+    ["55.66", "Transport", "Fuel"], ["823.23", "Bills", "Rent"], ["50", "Bills", "Discover intrest + late fee"], ["38.55", "Food", "Doordash food"],
+    ["20", "Food", "Uber Eats"], ["12", "Transport", "Parking"], ["9", "Shopping", "Cable organiser"], ["30", "Shopping", "Rental shoes"]];
+  for (const [amount, cat, note] of rows) ledger = core.addExpense(ledger, { amount, categoryID: id(cat), note }).ledger;
+  const kinds = Object.fromEntries(core.byKind(ledger, ledger.expenses).map(k => [k.label, [k.count, k.total]]));
+  assert.deepEqual(kinds, { Rent: [1, 823230], Flights: [1, 95000], Food: [2, 58550], Fuel: [1, 55660], Cabs: [3, 54950],
+    Bills: [1, 50000], Shopping: [2, 39000], Transport: [1, 12000] });
+  const cabs = core.byKind(ledger, ledger.expenses).find(k => k.label === "Cabs");
+  assert.deepEqual(cabs.places.map(p => p.label), ["Uber haircut", "Uber", "Lyft"]);
+});

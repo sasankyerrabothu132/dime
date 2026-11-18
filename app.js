@@ -251,14 +251,23 @@ function viewInsights() {
 
   // plain-language findings, most useful first
   const pace = core.pace(expenses, span, now);
-  const places = core.topPlaces(expenses, 50);
+  const kinds = core.byKind(state.ledger, expenses);
+  const times = n => (n === 1 ? "once" : `${n} times`);
   const notes = [];
-  notes.push(`<strong>${esc(cats[0].category.name)}</strong> is your biggest category: ${esc(money(cats[0].total))}, ${Math.round(cats[0].share * 100)}% of ${esc(here)}.`);
-  if (pace.oneOff) {
-    notes.push(`<strong>${esc(nameOf(pace.oneOff))}</strong> (${esc(money(core.toMinor(pace.oneOff.amount)))}) is one big payment. Everything else comes to ${esc(money(pace.everyday))}, about ${esc(money(pace.perDay))} a day.`);
+  if (!past && !all) {                                  // changes with every expense logged today
+    const day = core.intervalFor("today", new Date(), 1, WEEK_START);
+    const today = expenses.filter(e => { const t = Date.parse(e.date); return t >= day.start && t < day.end; });
+    notes.push(today.length ? `<strong>Today: ${esc(money(core.total(today)))}</strong> across ${today.length} expense${today.length === 1 ? "" : "s"}.`
+      : "Nothing logged today yet.");
   }
-  const repeat = places.filter(p => p.count > 1).sort((a, b) => b.count - a.count || b.total - a.total)[0];
-  if (repeat) notes.push(`You paid <strong>${esc(repeat.label)}</strong> ${repeat.count} times, ${esc(money(repeat.total))} in total.`);
+  notes.push(`<strong>${esc(kinds[0].label)}</strong> took the most: ${esc(money(kinds[0].total))}, ${Math.round(kinds[0].share * 100)}% of ${esc(here)}.`);
+  if (pace.oneOff) {
+    notes.push(`Leaving out ${esc(nameOf(pace.oneOff))} (${esc(money(core.toMinor(pace.oneOff.amount)))}), you spent ${esc(money(pace.everyday))}, about ${esc(money(pace.perDay))} a day.`);
+  }
+  // the kinds of spending that keep coming back, which is where cutting down is possible
+  for (const k of kinds.filter(k => k.count > 1).slice(0, 3)) {
+    notes.push(`<strong>${esc(k.label)}</strong>: ${k.count} times, ${esc(money(k.total))} in total, about ${esc(money(Math.round(k.total / k.count)))} each.`);
+  }
   if (!yearly && pace.projected !== null && pace.daysLeft > 0) {
     let line = `At this pace you will end the ${unit} at about <strong>${esc(money(pace.projected))}</strong>.`;
     if (range === "month" && status) {
@@ -278,25 +287,28 @@ function viewInsights() {
       : `<strong>${esc(money(Math.abs(diff)))} ${diff > 0 ? "more" : "less"}</strong> than ${versus} (${esc(money(then))}).`);
   }
   const findings = `<div class="card"><div class="small muted">What stands out</div><ul class="notes">${notes.map(n => `<li>${n}</li>`).join("")}</ul></div>`;
-  const placeRows = places.slice(0, 5).map(p => `<div class="place"><span class="clip">${esc(p.label)}</span>
-      <span class="small muted">${p.count === 1 ? "once" : `${p.count} times`}</span><span class="num">${esc(money(p.total))}</span></div>`).join("");
+  const kindRows = kinds.map(k => `<button class="place" data-action="show-kind" data-kind="${esc(k.label)}">
+      <span class="grow"><span class="name clip">${esc(k.label)}</span>
+        <span class="small muted clip">${times(k.count)}${k.places.length && !(k.places.length === 1 && k.places[0].label.toLowerCase() === k.label.toLowerCase())
+          ? `: ${esc(k.places.slice(0, 3).map(p => p.label).join(", "))}${k.places.length > 3 ? ` and ${k.places.length - 3} more` : ""}` : ""}</span></span>
+      <span class="end"><span class="num">${esc(money(k.total))}</span><span class="small muted">${Math.round(k.share * 100)}%</span></span>
+      <span class="chev" aria-hidden="true">›</span></button>`).join("");
   return `${head}${tiles}${findings}${chart}
-    <div class="card"><div class="small muted">By category. Tap one to see its expenses.</div><div class="stack">${rows}</div></div>
-    ${placeRows ? `<div class="card"><div class="small muted">Where the money went</div>${placeRows}</div>` : ""}`;
+    <div class="card"><div class="small muted">Where the money went. Cabs, flights, fuel and rent are pulled out by the words in your notes. Tap one to see its expenses.</div>${kindRows}</div>
+    <div class="card"><div class="small muted">By category. Tap one to see its expenses.</div><div class="stack">${rows}</div></div>`;
 }
 
-/** The expenses behind one category row on Insights, for the range being shown. */
-function sheetCategoryExpenses(id) {
-  const c = core.categoryById(state.ledger, id);
+/** The expenses behind one row on Insights (a category, or a kind such as Cabs), for the period being shown. */
+function sheetExpenseList(title, keep) {
   const span = insightsSpan();
-  const list = core.expensesIn(state.ledger, span).filter(e => e.categoryID === id)
+  const list = core.expensesIn(state.ledger, span).filter(keep)
     .sort((a, b) => core.toMinor(b.amount) - core.toMinor(a.amount));
-  openSheet(`${sheetHeader(`${c?.emoji ?? ""} ${c?.name ?? "Unknown"}`, "Close")}
+  openSheet(`${sheetHeader(title, "Close")}
     <p class="small muted">${list.length} expense${list.length === 1 ? "" : "s"} ${state.insightsRange === "all" ? "in total" : `in ${esc(spanLabel(state.insightsRange, span))}`}, ${esc(money(core.total(list)))} in total. Biggest first.</p>
     <div class="list">${list.map(e => {
       const day = new Date(e.date).toLocaleDateString(LOCALE, { day: "numeric", month: "short" });
       return `<button class="item" data-action="edit-expense" data-id="${esc(e.id)}">
-        <span class="main"><span class="title">${esc(e.note || c?.name || "Unknown")}</span><div class="sub">${esc(day)}</div></span>
+        <span class="main"><span class="title">${esc(e.note || core.categoryById(state.ledger, e.categoryID)?.name || "Unknown")}</span><div class="sub">${esc(day)}</div></span>
         <span class="end"><span class="title num">${esc(money(core.toMinor(e.amount)))}</span></span></button>`; }).join("")}</div>`);
 }
 
@@ -461,7 +473,8 @@ const ACTIONS = {
   "history-step": el => { state.historyBack = Math.max(0, state.historyBack + Number(el.dataset.dir)); render(); scrollTo(0, 0); },
   "insights-range": el => { state.insightsRange = el.dataset.range; state.insightsBar = null; state.insightsBack = 0; render(); },
   "insights-step": el => { state.insightsBack = Math.max(0, state.insightsBack + Number(el.dataset.dir)); state.insightsBar = null; render(); },
-  "show-category": el => sheetCategoryExpenses(el.dataset.id),
+  "show-category": el => { const c = core.categoryById(state.ledger, el.dataset.id); sheetExpenseList(`${c?.emoji ?? ""} ${c?.name ?? "Unknown"}`, e => e.categoryID === el.dataset.id); },
+  "show-kind": el => sheetExpenseList(el.dataset.kind, e => core.kindOf(state.ledger, e) === el.dataset.kind),
   "pick-bar": el => { state.insightsBar = Number(el.dataset.t); render(); },
   digit: el => { state.entry = core.entryAppend(state.entry, Number(el.dataset.digit), digits()); state.addError = null; render(); },
   separator: () => { state.entry = core.entrySeparator(state.entry, digits()); render(); },
